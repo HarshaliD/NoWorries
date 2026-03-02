@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from groq import Groq
 import json
 
-from state_engine import EmotionalState, update_state
+from state_engine import EmotionalState, update_state, decide_intervention
 
 load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -46,6 +46,61 @@ def crisis_check(message):
     crisis_terms = ["kill myself", "suicide", "end my life", "self harm", "i want to die"]
     return any(term in message.lower() for term in crisis_terms)
 
+
+# ---------------- TO-DO HELPERS ---------------- #
+
+def generate_todo_list(message, state, smaller=False):
+    tone_line = "Let’s shrink this into 3 tiny moves."
+    size_line = "Make the steps extra small and easier than the previous version." if smaller else ""
+
+    prompt = f"""
+{tone_line}
+Generate a proposed to-do list from this user message.
+
+Rules:
+- Exactly 3 numbered steps
+- Small and concrete actions
+- Not motivational, not abstract
+- Not overwhelming
+- Calm, collaborative tone
+- Keep each step short
+{size_line}
+
+User message:
+{message}
+"""
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=[
+            {"role": "system", "content": "You create tiny, practical plans."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.4
+    )
+
+    raw = response.choices[0].message.content.strip()
+    lines = [line.strip() for line in raw.split("\n") if line.strip()]
+    todo_lines = [line for line in lines if line[0:1].isdigit()][:3]
+
+    if len(todo_lines) < 3:
+        todo_lines = [
+            "1. Open your notes and mark one topic to review.",
+            "2. Spend 10 minutes reviewing just that one topic.",
+            "3. Write one question you still need to clarify."
+        ]
+
+    state.current_todo = todo_lines
+    state.awaiting_todo_confirmation = True
+    state.todo_active = False
+
+    return (
+        "Let’s shrink this into 3 tiny moves.\n"
+        + "\n".join(todo_lines)
+        + "\n\nWant to use this plan?"
+    )
+
+
 # ---------------- EXIT VIDEO ---------------- #
 
 def exit_video(state):
@@ -55,6 +110,7 @@ def exit_video(state):
         gr.update(visible=True),
         gr.update(visible=False)
     )
+
 
 # ---------------- MAIN CHAT FUNCTION ---------------- #
 
@@ -153,11 +209,23 @@ def chat(message, history, state):
     # -------- Update Emotional Engine -------- #
 
     engine = update_state(engine, message)
+    intervention = decide_intervention(engine, message)
     state["engine"] = engine
+
+    if intervention == "generate_todo":
+        reply = generate_todo_list(message, engine)
+
+    elif intervention == "confirm_todo":
+        engine.todo_active = True
+        engine.awaiting_todo_confirmation = False
+        reply = "Great — we’ll use this. Start with step 1, then message me when it’s done."
+
+    elif intervention == "regenerate_todo":
+        reply = generate_todo_list(message, engine, smaller=True)
 
     # -------- Hyperarousal → Offer Video -------- #
 
-    if engine.reaction_type == "hyperarousal" and engine.intensity == 2:
+    elif engine.reaction_type == "hyperarousal" and engine.intensity == 2:
         reply = "Okay. That’s a lot. Want a quick reset?"
         state["offer_video"] = True
 
@@ -204,6 +272,7 @@ def chat(message, history, state):
         gr.update(visible=True),
         gr.update(visible=False)
     )
+
 
 # ---------------- UI ---------------- #
 

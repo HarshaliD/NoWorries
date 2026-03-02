@@ -16,6 +16,9 @@ class EmotionalState:
         self.intensity: int = 0
         self.candidate_reaction: Optional[str] = None
         self.previous_reaction: Optional[str] = None
+        self.awaiting_todo_confirmation: bool = False
+        self.current_todo: list[str] = []
+        self.todo_active: bool = False
 
     def __repr__(self):
         return (
@@ -23,7 +26,9 @@ class EmotionalState:
             f"situation_summary={self.situation_summary}, "
             f"reaction_type={self.reaction_type}, "
             f"intensity={self.intensity}, "
-            f"candidate_reaction={self.candidate_reaction})"
+            f"candidate_reaction={self.candidate_reaction}, "
+            f"awaiting_todo_confirmation={self.awaiting_todo_confirmation}, "
+            f"todo_active={self.todo_active})"
         )
 
 
@@ -120,6 +125,34 @@ def update_situation(state: EmotionalState, text: str):
         state.situation_summary = "Career transition"
 
 
+# ---------------- Intervention Decision Logic ---------------- #
+
+def decide_intervention(state: EmotionalState, user_message: str) -> str:
+    message = user_message.lower().strip()
+
+    if state.awaiting_todo_confirmation:
+        confirm_terms = {"yes", "yeah", "ok", "okay", "sure", "that works", "sounds good"}
+        regenerate_terms = {"no", "nah", "too much", "change it", "different", "smaller"}
+
+        if message in confirm_terms:
+            return "confirm_todo"
+
+        if message in regenerate_terms:
+            return "regenerate_todo"
+
+        return "none"
+
+    if (
+        state.reaction_type == "anticipatory"
+        and state.intensity <= 1
+        and state.reaction_type != "hyperarousal"
+        and not state.todo_active
+    ):
+        return "generate_todo"
+
+    return "none"
+
+
 # ---------------- Main Update ---------------- #
 
 def update_state(state: EmotionalState, user_message: str):
@@ -130,6 +163,7 @@ def update_state(state: EmotionalState, user_message: str):
         state.reaction_type = "hyperarousal"
         state.intensity = 2
         state.candidate_reaction = None
+        state.awaiting_todo_confirmation = False
         return state
 
     update_situation(state, user_message)
