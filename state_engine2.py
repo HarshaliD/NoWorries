@@ -1,5 +1,3 @@
-# state_engine.py  (UPDATED — additive changes only)
-
 import os
 from typing import Optional
 from dotenv import load_dotenv
@@ -17,21 +15,12 @@ class EmotionalState:
         self.candidate_reaction: Optional[str] = None
         self.previous_reaction: Optional[str] = None
 
-        # -------- NEW: To-Do State --------
+        # ---- To-Do System (NEW) ----
+        self.awaiting_todo_offer: bool = False
+        self.awaiting_todo_dump: bool = False
         self.awaiting_todo_confirmation: bool = False
         self.current_todo: list[str] = []
         self.auto_todo_used: bool = False
-
-    def __repr__(self):
-        return (
-            f"EmotionalState("
-            f"situation_summary={self.situation_summary}, "
-            f"reaction_type={self.reaction_type}, "
-            f"intensity={self.intensity}, "
-            f"candidate_reaction={self.candidate_reaction}, "
-            f"awaiting_todo_confirmation={self.awaiting_todo_confirmation}, "
-            f"auto_todo_used={self.auto_todo_used})"
-        )
 
 
 # ---------------- Hyperarousal Detection ---------------- #
@@ -49,7 +38,7 @@ def detect_hyperarousal(text: str) -> bool:
     return any(k in text for k in keywords)
 
 
-# ---------------- LLM Reaction Classification ---------------- #
+# ---------------- Reaction Classification ---------------- #
 
 def classify_reaction_llm(message: str) -> str:
 
@@ -81,12 +70,9 @@ Message:
         allowed = {"freeze", "rumination", "anticipatory", "none"}
         return label if label in allowed else "none"
 
-    except Exception as e:
-        print("Classifier error:", e)
+    except:
         return "none"
 
-
-# ---------------- Sticky Reaction Logic ---------------- #
 
 def update_reaction(state: EmotionalState, new_label: str):
 
@@ -95,8 +81,8 @@ def update_reaction(state: EmotionalState, new_label: str):
 
     if state.reaction_type is None:
         state.reaction_type = new_label
-        state.intensity = max(state.intensity, 1)
-        state.auto_todo_used = False  # reset cycle
+        state.intensity = 1
+        state.auto_todo_used = False
         return
 
     if new_label == state.reaction_type:
@@ -106,12 +92,10 @@ def update_reaction(state: EmotionalState, new_label: str):
     if state.candidate_reaction == new_label:
         state.reaction_type = new_label
         state.candidate_reaction = None
-        state.auto_todo_used = False  # reset cycle
+        state.auto_todo_used = False
     else:
         state.candidate_reaction = new_label
 
-
-# ---------------- Situation Summary ---------------- #
 
 def update_situation(state: EmotionalState, text: str):
     text = text.lower()
@@ -124,7 +108,7 @@ def update_situation(state: EmotionalState, text: str):
         state.situation_summary = "Career transition"
 
 
-# ---------------- NEW: Cognitive Overload Gate ---------------- #
+# ---------------- Cognitive Overload Gate ---------------- #
 
 def is_cognitive_overload(message: str) -> bool:
     message = message.lower()
@@ -152,30 +136,33 @@ def is_cognitive_overload(message: str) -> bool:
     return False
 
 
-# ---------------- NEW: Intervention Decision ---------------- #
+# ---------------- Intervention Decision ---------------- #
 
 def decide_intervention(state: EmotionalState, user_message: str) -> str:
     message = user_message.lower().strip()
 
-    # Confirmation branch
-    if state.awaiting_todo_confirmation:
-        confirm_terms = {"yes", "yeah", "ok", "okay", "sure", "that works", "sounds good"}
-        regenerate_terms = {"no", "nah", "too much", "change it", "different", "smaller"}
+    confirm_terms = {"yes", "yeah", "ok", "okay", "sure", "that works"}
+    decline_terms = {"no", "nah", "not now"}
+    planning_terms = {"to do", "todo", "plan", "schedule", "make a list"}
 
+    if state.awaiting_todo_offer:
         if any(term in message for term in confirm_terms):
-            return "confirm_todo"
-
-        if any(term in message for term in regenerate_terms):
-            return "regenerate_todo"
-
+            state.awaiting_todo_offer = False
+            state.awaiting_todo_dump = True
+            return "request_dump"
+        if any(term in message for term in decline_terms):
+            state.awaiting_todo_offer = False
+            return "decline_offer"
         return "none"
 
-    # Explicit request always honored
-    planning_terms = {"to do", "todo", "plan", "schedule", "help planning", "make a list"}
-    if any(term in message for term in planning_terms):
-        return "generate_todo_explicit"
+    if state.awaiting_todo_dump:
+        state.awaiting_todo_dump = False
+        return "process_dump"
 
-    # Auto-trigger (controlled)
+    if any(term in message for term in planning_terms):
+        state.awaiting_todo_dump = True
+        return "request_dump"
+
     if (
         state.reaction_type in {"anticipatory", "freeze"}
         and state.intensity <= 1
@@ -183,7 +170,8 @@ def decide_intervention(state: EmotionalState, user_message: str) -> str:
         and is_cognitive_overload(message)
     ):
         state.auto_todo_used = True
-        return "generate_todo_auto"
+        state.awaiting_todo_offer = True
+        return "offer"
 
     return "none"
 
